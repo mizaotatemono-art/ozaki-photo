@@ -116,6 +116,7 @@ $('analyze').onclick = async () => {
       await seek(t);
       ts = Math.max(ts + 1, Math.round(t * 1000));
       const r = lm.detectForVideo(video, ts);
+      grabColorFrame(t);
       const cands = (r.landmarks || []).map((p) => toPixels(p, video.videoWidth, video.videoHeight));
       let pts = pickAthlete(cands, t);
       // 見失ったら、いそうな場所を切り出して拡大・回転（逆さま対応）して探し直す
@@ -156,17 +157,23 @@ function predicted(t) {
   const dt = Math.min(1, t - tr.t);
   return { x: tr.cx + tr.vx * dt, y: tr.cy + tr.vy * dt, dt: t - tr.t };
 }
-function matchTrack(boxes, t) {
+const COLOR_LIMIT = 70; // 服の色の違いの許容（RGBの距離）
+function matchTrack(cands, t) {
   const tr = state.track;
   const pr = predicted(t);
   const radius = tr.size * (0.9 + 2.5 * Math.min(pr.dt, 2));
-  let best = -1, bestD = Infinity;
-  boxes.forEach((b, i) => {
+  let best = -1, bestCost = Infinity;
+  cands.forEach((p, i) => {
+    const b = bodyBox(p);
     if (!b) return;
     const ratio = b.size / tr.size;
     if (ratio < 0.4 || ratio > 2.5) return;
     const d = Math.hypot(b.cx - pr.x, b.cy - pr.y);
-    if (d < radius && d < bestD) { bestD = d; best = i; }
+    if (d >= radius) return;
+    const cd = colorDiff(tr.color, torsoColor(p));
+    if (cd > COLOR_LIMIT) return; // 服の色が違う＝別人
+    const cost = d / radius + cd / COLOR_LIMIT;
+    if (cost < bestCost) { bestCost = cost; best = i; }
   });
   return best;
 }
@@ -174,7 +181,7 @@ function pickAthlete(cands, t) {
   const boxes = cands.map(bodyBox);
   if (!boxes.some(Boolean)) return null;
   if (state.track) {
-    const i = matchTrack(boxes, t);
+    const i = matchTrack(cands, t);
     return i >= 0 ? cands[i] : null;
   }
   // 追跡開始：指定位置に一番近い人、指定がなければ一番大きく映っている人
@@ -193,10 +200,45 @@ function updateTrack(pts, t) {
     const dt = t - tr.t;
     const vx = (b.cx - tr.cx) / dt, vy = (b.cy - tr.cy) / dt;
     const lim = b.size * 4;
-    state.track = { ...b, t, vx: clamp(0.5 * tr.vx + 0.5 * vx, -lim, lim), vy: clamp(0.5 * tr.vy + 0.5 * vy, -lim, lim), size: 0.7 * tr.size + 0.3 * b.size };
-  } else state.track = { ...b, t, vx: 0, vy: 0 };
+    const c = torsoColor(pts);
+    const color = tr.color && c ? tr.color.map((x, k) => 0.9 * x + 0.1 * c[k]) : tr.color || c;
+    state.track = { ...b, t, color, vx: clamp(0.5 * tr.vx + 0.5 * vx, -lim, lim), vy: clamp(0.5 * tr.vy + 0.5 * vy, -lim, lim), size: 0.7 * tr.size + 0.3 * b.size };
+  } else state.track = { ...b, t, vx: 0, vy: 0, color: torsoColor(pts) };
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+
+// 胴体（肩〜腰）の服の色。レオタードと審判の服などを見分けるのに使う
+const colorCanvas = document.createElement('canvas');
+let colorScale = 1, colorReady = -1;
+function grabColorFrame(t) {
+  if (colorReady === t) return;
+  const VW = video.videoWidth, VH = video.videoHeight;
+  colorScale = 240 / Math.max(VW, VH);
+  colorCanvas.width = Math.round(VW * colorScale);
+  colorCanvas.height = Math.round(VH * colorScale);
+  colorCanvas.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0, colorCanvas.width, colorCanvas.height);
+  colorReady = t;
+}
+function torsoColor(p) {
+  const pairs = [[11, 23], [12, 24]];
+  const c = colorCanvas.getContext('2d', { willReadFrequently: true });
+  let r = 0, g = 0, b = 0, n = 0;
+  for (const [s, h] of pairs) {
+    if (p[s].v < 0.3 || p[h].v < 0.3) continue;
+    for (const f of [0.3, 0.5, 0.7]) {
+      const x = Math.round((p[s].x + (p[h].x - p[s].x) * f) * colorScale);
+      const y = Math.round((p[s].y + (p[h].y - p[s].y) * f) * colorScale);
+      if (x < 0 || y < 0 || x >= colorCanvas.width || y >= colorCanvas.height) continue;
+      const d = c.getImageData(x, y, 1, 1).data;
+      r += d[0]; g += d[1]; b += d[2]; n++;
+    }
+  }
+  return n ? [r / n, g / n, b / n] : null;
+}
+function colorDiff(a, b) {
+  if (!a || !b) return 0;
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
 
 const cropCanvas = document.createElement('canvas');
 const CROP = 512;
@@ -230,7 +272,7 @@ function searchCrop(t) {
         return { x: sx + (qx + CROP / 2) * k, y: sy + (qy + CROP / 2) * k, v: p.visibility ?? 1 };
       })
     );
-    const i = matchTrack(cands.map(bodyBox), t);
+    const i = matchTrack(cands, t);
     if (i >= 0) return cands[i];
   }
   return null;
