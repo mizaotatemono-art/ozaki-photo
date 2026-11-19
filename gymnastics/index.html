@@ -98,7 +98,7 @@ details summary{cursor:pointer;color:var(--accent)}
     <label class="btn primary">📹 撮影する<input id="cam" type="file" accept="video/*" capture="environment"></label>
     <label class="btn">🎞 動画を選ぶ<input id="pick" type="file" accept="video/*"></label>
   </div>
-  <p class="hint">撮り方：演技の<b>真横</b>から、スマホを固定して<b>全身（手先〜足先）が最後まで入る</b>ように撮影してください。着地まで撮ると着地の減点も判定できます。</p>
+  <p class="hint">撮り方：演技の<b>真横</b>から、スマホを固定して<b>全身（手先〜足先）が最後まで入る</b>ように撮影してください。着地まで撮ると着地の減点も判定できます。iPhone の .mov（HEVC）は Android のブラウザでは再生できないことがあります。</p>
 </section>
 
 <section class="card">
@@ -125,6 +125,7 @@ details summary{cursor:pointer;color:var(--accent)}
     <span id="status" class="hint" style="margin:0"></span>
   </div>
   <div class="progress"><div id="bar"></div></div>
+  <p class="warn" id="qualityWarn" hidden>骨格が安定して取れていません（選手が小さい・ブレている・人と重なっている）。自動の姿勢減点は信用せず、再生して確認しながら各技の「調整」欄に減点を入力してください。撮り直す場合は、近くから横向き（スマホを横に）で固定し、明るい場所で撮るか、iPhone の「スロー」撮影を使うとブレが減ります。</p>
   <p class="hint">審判や他の選手も映っている時は「選手を指定」を押し、演技を始める直前で止めて選手をタップしてください。そこから解析し、その人を追いかけます。</p>
 </section>
 

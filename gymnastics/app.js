@@ -132,7 +132,19 @@ $('analyze').onclick = async () => {
     $('bar').style.width = '100%';
     setFrames(frames);
     const found = frames.filter((f) => f.pts).length;
-    setStatus(`解析完了：${n} コマ中 ${found} コマで体を検出。候補 ${state.candidates.length} 件`);
+    // 骨格の安定度：体の長さが前のコマから急に変わる（別人・誤検出）割合
+    let jumps = 0, pairs = 0;
+    const fs = state.an.feats;
+    for (let k = 1; k < fs.length; k++) {
+      if (!fs[k] || !fs[k - 1]) continue;
+      pairs++;
+      const r = fs[k].bodyLen / fs[k - 1].bodyLen;
+      if (r > 1.5 || r < 0.67) jumps++;
+    }
+    const unstable = pairs ? jumps / pairs : 1;
+    const quality = found / n < 0.6 || unstable > 0.2 ? '低い' : unstable > 0.1 ? 'ふつう' : '高い';
+    setStatus(`解析完了：${n} コマ中 ${found} コマで体を検出。候補 ${state.candidates.length} 件。骨格の安定度：${quality}`);
+    $('qualityWarn').hidden = quality !== '低い';
     await seek(t0);
   } catch (err) {
     console.error(err);
