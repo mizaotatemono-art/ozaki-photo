@@ -24,7 +24,7 @@ const state = {
   videoKey: null,
   opts: { apparatus: 'FX', ruleset: 'FIG', groups: {}, connection: 0, neutral: 0, stick: false, vaultD: 0, extraE: 0 },
 };
-let landmarker = null, landmarkerModel = null;
+let landmarker = null, cropLandmarker = null, landmarkerModel = null;
 let nextId = 1;
 
 // ---------- 初期化 ----------
@@ -76,6 +76,16 @@ async function getLandmarker(model) {
       minTrackingConfidence: 0.4,
     });
   try { landmarker = await make('GPU'); } catch { landmarker = await make('CPU'); }
+  // 見失った時に切り出し画像で探し直す用（静止画モード）
+  const makeImg = (delegate) =>
+    PoseLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath: MODEL_URL(model), delegate },
+      runningMode: 'IMAGE',
+      numPoses: 2,
+      minPoseDetectionConfidence: 0.3,
+      minPosePresenceConfidence: 0.3,
+    });
+  try { cropLandmarker = await makeImg('GPU'); } catch { cropLandmarker = await makeImg('CPU'); }
   landmarkerModel = model;
   return landmarker;
 }
@@ -99,15 +109,18 @@ $('analyze').onclick = async () => {
     const t0 = state.pickPoint ? state.pickPoint.t : 0;
     const n = Math.floor((dur - t0) * fps) + 1;
     const frames = [];
-    state.target = state.pickPoint ? { ...state.pickPoint } : null;
+    state.track = null;
     let ts = 0;
     for (let i = 0; i < n; i++) {
-      const t = Math.min(dur - 0.001, t0 + i / fps);
+      const t = Math.min(dur - 0.001, t0 + i / fps + 0.016); // コマの境目を避ける
       await seek(t);
       ts = Math.max(ts + 1, Math.round(t * 1000));
       const r = lm.detectForVideo(video, ts);
       const cands = (r.landmarks || []).map((p) => toPixels(p, video.videoWidth, video.videoHeight));
-      const pts = pickAthlete(cands, frames, t);
+      let pts = pickAthlete(cands, t);
+      // 見失ったら、いそうな場所を切り出して拡大・回転（逆さま対応）して探し直す
+      if (!pts && state.track) pts = searchCrop(t);
+      if (pts) updateTrack(pts, t);
       frames.push({ t, pts });
       if (i % 3 === 0) {
         $('bar').style.width = `${((i + 1) / n) * 100}%`;
@@ -128,40 +141,99 @@ $('analyze').onclick = async () => {
   }
 };
 
-// 複数人が映っている場合に選手を選ぶ：
-// 直前に追っていた人の近くにいる人を優先し、見失っていたら一番大きく映っている人を選ぶ。
+// ---------- 選手の追跡 ----------
+// 審判・観客も映るため、最初に指定した（または一番大きい）人を追い続ける。
+// 見失っても、予測位置の近くで大きさが同じくらいの人しか選ばない（別人に飛ばない）。
 function bodyBox(p) {
   const xs = [], ys = [];
-  for (const k of [0, 11, 12, 15, 16, 23, 24, 27, 28]) if (p[k].v > 0.3) { xs.push(p[k].x); ys.push(p[k].y); }
-  if (xs.length < 3) return null;
+  for (const k of [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) if (p[k].v > 0.3) { xs.push(p[k].x); ys.push(p[k].y); }
+  if (xs.length < 4) return null;
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
   return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, size: Math.max(x1 - x0, y1 - y0, 1) };
 }
-function pickAthlete(cands, frames, t) {
+function predicted(t) {
+  const tr = state.track;
+  const dt = Math.min(1, t - tr.t);
+  return { x: tr.cx + tr.vx * dt, y: tr.cy + tr.vy * dt, dt: t - tr.t };
+}
+function matchTrack(boxes, t) {
+  const tr = state.track;
+  const pr = predicted(t);
+  const radius = tr.size * (0.9 + 2.5 * Math.min(pr.dt, 2));
+  let best = -1, bestD = Infinity;
+  boxes.forEach((b, i) => {
+    if (!b) return;
+    const ratio = b.size / tr.size;
+    if (ratio < 0.4 || ratio > 2.5) return;
+    const d = Math.hypot(b.cx - pr.x, b.cy - pr.y);
+    if (d < radius && d < bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+function pickAthlete(cands, t) {
   const boxes = cands.map(bodyBox);
-  const ok = cands.map((p, i) => ({ p, b: boxes[i] })).filter((x) => x.b);
-  if (!ok.length) return null;
-  if (state.target) {
-    const prev = [...frames].reverse().find((f) => f.pts && t - f.t < 0.6);
-    const pb = prev && bodyBox(prev.pts);
-    if (pb) {
-      let best = null, bestD = Infinity;
-      for (const x of ok) {
-        const d = Math.hypot(x.b.cx - pb.cx, x.b.cy - pb.cy) / pb.size;
-        if (d < bestD) { bestD = d; best = x; }
-      }
-      if (best && bestD < 1.5) return best.p;
-      return null; // 近くに誰もいない＝見失った（別人に飛ばない）
-    }
+  if (!boxes.some(Boolean)) return null;
+  if (state.track) {
+    const i = matchTrack(boxes, t);
+    return i >= 0 ? cands[i] : null;
   }
-  // 指定位置があればそこに一番近い人、なければ一番大きく映っている人
-  if (state.target?.x != null) {
-    ok.sort((a, b) => Math.hypot(a.b.cx - state.target.x, a.b.cy - state.target.y) - Math.hypot(b.b.cx - state.target.x, b.b.cy - state.target.y));
-    return ok[0].p;
+  // 追跡開始：指定位置に一番近い人、指定がなければ一番大きく映っている人
+  const idx = boxes.map((b, i) => i).filter((i) => boxes[i]);
+  const pp = state.pickPoint;
+  idx.sort((i, j) =>
+    pp ? Math.hypot(boxes[i].cx - pp.x, boxes[i].cy - pp.y) - Math.hypot(boxes[j].cx - pp.x, boxes[j].cy - pp.y)
+       : boxes[j].size - boxes[i].size);
+  return cands[idx[0]];
+}
+function updateTrack(pts, t) {
+  const b = bodyBox(pts);
+  if (!b) return;
+  const tr = state.track;
+  if (tr && t > tr.t) {
+    const dt = t - tr.t;
+    const vx = (b.cx - tr.cx) / dt, vy = (b.cy - tr.cy) / dt;
+    const lim = b.size * 4;
+    state.track = { ...b, t, vx: clamp(0.5 * tr.vx + 0.5 * vx, -lim, lim), vy: clamp(0.5 * tr.vy + 0.5 * vy, -lim, lim), size: 0.7 * tr.size + 0.3 * b.size };
+  } else state.track = { ...b, t, vx: 0, vy: 0 };
+}
+function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+
+const cropCanvas = document.createElement('canvas');
+const CROP = 512;
+cropCanvas.width = cropCanvas.height = CROP;
+function searchCrop(t) {
+  if (!cropLandmarker) return null;
+  const tr = state.track;
+  const pr = predicted(t);
+  if (pr.dt > 2.5) return null;
+  const VW = video.videoWidth, VH = video.videoHeight;
+  const side = clamp(tr.size * (2.2 + 2 * Math.min(pr.dt, 1)), 160, Math.max(VW, VH));
+  const sx = pr.x - side / 2, sy = pr.y - side / 2;
+  const cctx = cropCanvas.getContext('2d');
+  for (const deg of [0, 180, 90, 270]) {
+    const rad = (deg * Math.PI) / 180;
+    cctx.setTransform(1, 0, 0, 1, 0, 0);
+    cctx.fillStyle = '#000';
+    cctx.fillRect(0, 0, CROP, CROP);
+    cctx.translate(CROP / 2, CROP / 2);
+    cctx.rotate(rad);
+    cctx.drawImage(video, sx, sy, side, side, -CROP / 2, -CROP / 2, CROP, CROP);
+    let r;
+    try { r = cropLandmarker.detect(cropCanvas); } catch { return null; }
+    if (!r.landmarks?.length) continue;
+    // 切り出し画像の座標 → 動画の座標に戻す
+    const cos = Math.cos(-rad), sin = Math.sin(-rad), k = side / CROP;
+    const cands = r.landmarks.map((lm) =>
+      lm.map((p) => {
+        const px = p.x * CROP - CROP / 2, py = p.y * CROP - CROP / 2;
+        const qx = px * cos - py * sin, qy = px * sin + py * cos;
+        return { x: sx + (qx + CROP / 2) * k, y: sy + (qy + CROP / 2) * k, v: p.visibility ?? 1 };
+      })
+    );
+    const i = matchTrack(cands.map(bodyBox), t);
+    if (i >= 0) return cands[i];
   }
-  ok.sort((a, b) => b.b.size - a.b.size);
-  state.target = state.target || {};
-  return ok[0].p;
+  return null;
 }
 
 function setFrames(frames) {
