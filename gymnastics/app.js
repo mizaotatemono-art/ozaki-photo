@@ -170,8 +170,9 @@ function matchTrack(cands, t) {
     if (ratio < 0.4 || ratio > 2.5) return;
     const d = Math.hypot(b.cx - pr.x, b.cy - pr.y);
     if (d >= radius) return;
-    const cd = colorDiff(tr.color, torsoColor(p));
-    if (cd > COLOR_LIMIT) return; // 服の色が違う＝別人
+    // 服の色：十分に覚えてから使い、大きく違う時だけ別人とみなす（ブレで色は多少変わる）
+    const cd = tr.colorN >= 5 ? colorDiff(tr.color, torsoColor(p)) : 0;
+    if (cd > COLOR_LIMIT * 1.6) return;
     const cost = d / radius + cd / COLOR_LIMIT;
     if (cost < bestCost) { bestCost = cost; best = i; }
   });
@@ -202,8 +203,8 @@ function updateTrack(pts, t) {
     const lim = b.size * 4;
     const c = torsoColor(pts);
     const color = tr.color && c ? tr.color.map((x, k) => 0.9 * x + 0.1 * c[k]) : tr.color || c;
-    state.track = { ...b, t, color, vx: clamp(0.5 * tr.vx + 0.5 * vx, -lim, lim), vy: clamp(0.5 * tr.vy + 0.5 * vy, -lim, lim), size: 0.7 * tr.size + 0.3 * b.size };
-  } else state.track = { ...b, t, vx: 0, vy: 0, color: torsoColor(pts) };
+    state.track = { ...b, t, color, colorN: (tr.colorN || 0) + (c ? 1 : 0), vx: clamp(0.5 * tr.vx + 0.5 * vx, -lim, lim), vy: clamp(0.5 * tr.vy + 0.5 * vy, -lim, lim), size: 0.7 * tr.size + 0.3 * b.size };
+  } else { const c = torsoColor(pts); state.track = { ...b, t, vx: 0, vy: 0, color: c, colorN: c ? 1 : 0 }; }
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
