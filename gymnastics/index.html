@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#0f172a">
+<title>体操採点ビューア</title>
+<style>
+:root{
+  --bg:#f4f5f7; --panel:#ffffff; --ink:#111827; --sub:#5b6472; --line:#e3e6eb;
+  --accent:#2563eb; --accent-ink:#fff; --ok:#16a34a; --s:#eab308; --m:#f97316; --l:#dc2626;
+  --chip:#eef2ff;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0b1020; --panel:#141a2b; --ink:#e6e9ef; --sub:#9aa3b2; --line:#26304a;
+    --accent:#3b82f6; --chip:#1e2742;
+  }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif}
+header{padding:14px 16px 6px;max-width:960px;margin:0 auto}
+header h1{font-size:20px;margin:0}
+header p{margin:4px 0 0;color:var(--sub);font-size:13px}
+main{max-width:960px;margin:0 auto;padding:0 12px 80px}
+section.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+section.card h2{font-size:16px;margin:0 0 10px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+label.f{display:flex;flex-direction:column;font-size:12px;color:var(--sub);gap:3px;flex:1 1 140px}
+select,input[type=number],input[type=text]{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 8px;min-width:0}
+button,.btn{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:10px;padding:9px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;justify-content:center}
+button.primary,.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+.btn input{display:none}
+.hint{color:var(--sub);font-size:12.5px;margin:6px 0 0}
+.progress{height:8px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:8px}
+.progress>div{height:100%;width:0;background:var(--accent);transition:width .15s}
+#stage{position:relative;width:100%;background:#000;border-radius:12px;overflow:hidden;touch-action:manipulation}
+#stage video{display:block;width:100%;height:auto}
+#stage canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#empty{color:#cbd5e1;text-align:center;padding:60px 16px;font-size:14px}
+.controls{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.controls button{flex:1 1 auto;min-width:48px}
+#timeline{position:relative;height:44px;margin-top:10px;background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer}
+#timeline .seg{position:absolute;top:6px;height:20px;border-radius:4px;font-size:10px;color:#fff;padding:2px 3px;overflow:hidden;white-space:nowrap}
+#timeline .cand{position:absolute;top:30px;height:8px;border-radius:3px;background:var(--sub);opacity:.5}
+#timeline .head{position:absolute;top:0;bottom:0;width:2px;background:var(--l)}
+.score-big{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center}
+.score-big div{background:var(--bg);border-radius:10px;padding:8px 4px}
+.score-big b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
+.score-big span{font-size:11.5px;color:var(--sub)}
+.score-big .total{background:var(--accent);color:var(--accent-ink)}
+.score-big .total span{color:inherit;opacity:.85}
+.el{border:1px solid var(--line);border-radius:10px;padding:10px;margin:8px 0}
+.el.active{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 30%,transparent)}
+.el .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.el .top input[type=text]{flex:1 1 140px}
+.el .time{font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums;cursor:pointer;text-decoration:underline dotted}
+.el .ded{font-size:12.5px;margin-top:6px}
+.el .ded li{margin:1px 0}
+.chip{display:inline-block;background:var(--chip);border-radius:999px;padding:1px 8px;font-size:12px;margin:2px 2px 0 0}
+.d01{color:var(--s)}.d03{color:var(--m)}.d05{color:var(--l)}
+.cands li{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line)}
+.cands{list-style:none;padding:0;margin:0}
+table.br{width:100%;border-collapse:collapse;font-size:13px}
+table.br td{padding:4px 2px;border-bottom:1px solid var(--line)}
+table.br td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+details{margin-top:6px}
+details summary{cursor:pointer;color:var(--accent)}
+.rules h3{font-size:14px;margin:12px 0 4px}
+.rules table{border-collapse:collapse;font-size:13px;width:100%}
+.rules td,.rules th{border:1px solid var(--line);padding:4px 6px;text-align:left}
+.warn{background:color-mix(in srgb,var(--m) 15%,transparent);border-radius:8px;padding:8px 10px;font-size:13px}
+.sticky-score{position:sticky;top:0;z-index:5}
+@media (max-width:520px){ .score-big b{font-size:19px} }
+</style>
+</head>
+<body>
+<header>
+  <h1>体操採点ビューア</h1>
+  <p>横から撮った演技動画の姿勢を解析し、再生しながら技の難度・姿勢の減点・得点を表示します。</p>
+</header>
+<main>
+
+<section class="card">
+  <h2>1. 種目と動画</h2>
+  <div class="row">
+    <label class="f">種目
+      <select id="apparatus"></select>
+    </label>
+    <label class="f">採点ルール
+      <select id="ruleset"></select>
+    </label>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <label class="btn primary">📹 撮影する<input id="cam" type="file" accept="video/*" capture="environment"></label>
+    <label class="btn">🎞 動画を選ぶ<input id="pick" type="file" accept="video/*"></label>
+  </div>
+  <p class="hint">撮り方：演技の<b>真横</b>から、スマホを固定して<b>全身（手先〜足先）が最後まで入る</b>ように撮影してください。着地まで撮ると着地の減点も判定できます。</p>
+</section>
+
+<section class="card">
+  <h2>2. 姿勢を解析</h2>
+  <div class="row">
+    <label class="f">解析の細かさ
+      <select id="fps">
+        <option value="10">速い（1秒10コマ）</option>
+        <option value="15" selected>標準（1秒15コマ）</option>
+        <option value="30">細かい（1秒30コマ）</option>
+      </select>
+    </label>
+    <label class="f">骨格モデル
+      <select id="model">
+        <option value="lite">軽量（古いスマホ向け）</option>
+        <option value="full" selected>標準</option>
+        <option value="heavy">高精度（時間がかかる）</option>
+      </select>
+    </label>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button id="analyze" class="primary" disabled>姿勢を解析する</button>
+    <span id="status" class="hint" style="margin:0"></span>
+  </div>
+  <div class="progress"><div id="bar"></div></div>
+</section>
+
+<section class="card" id="playerCard">
+  <h2>3. 再生しながら確認</h2>
+  <div id="stage">
+    <div id="empty">動画を選ぶとここに表示されます</div>
+    <video id="video" playsinline muted preload="auto" hidden></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div class="controls">
+    <button id="back">⏮ 1コマ</button>
+    <button id="play" class="primary">▶ 再生</button>
+    <button id="fwd">1コマ ⏭</button>
+    <select id="rate" aria-label="再生速度">
+      <option value="0.25">0.25倍</option>
+      <option value="0.5" selected>0.5倍</option>
+      <option value="1">1倍</option>
+    </select>
+    <button id="toggleOverlay">骨格 表示中</button>
+  </div>
+  <div id="timeline" aria-label="タイムライン"></div>
+  <p class="hint">タイムライン上段＝登録した技（色＝難度）、下段の灰色＝自動で見つけた技の候補。タップするとその位置へ移動します。</p>
+</section>
+
+<section class="card sticky-score">
+  <div class="score-big">
+    <div><b id="sD">0.000</b><span>Dスコア</span></div>
+    <div><b id="sE">10.000</b><span>Eスコア</span></div>
+    <div><b id="sN">0.000</b><span>ニュートラル減点</span></div>
+    <div class="total"><b id="sT">10.000</b><span>決定点</span></div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>4. 技を登録</h2>
+  <div class="row">
+    <button id="markStart">⏺ ここから技</button>
+    <button id="markEnd" disabled>⏹ ここまで</button>
+    <span id="markInfo" class="hint" style="margin:0"></span>
+  </div>
+  <p class="hint">動画を止めて技の始まりと終わりで押すと登録されます。登録後に「難度（A〜）」と「形」を選ぶと、その形に合わせて膝・腰・肘の曲がりや倒立の角度を自動で減点します。</p>
+  <div id="candBox" hidden>
+    <h3 style="font-size:14px;margin:12px 0 4px">自動で見つけた技の候補</h3>
+    <ul class="cands" id="cands"></ul>
+    <button id="addAll" style="margin-top:8px">候補をすべて登録</button>
+  </div>
+  <div id="elements"></div>
+</section>
+
+<section class="card">
+  <h2>5. 得点の内訳</h2>
+  <div id="groupsBox"></div>
+  <div class="row" style="margin-top:8px">
+    <label class="f" id="vaultBox" hidden>跳馬の難度点（Dスコア）
+      <input id="vaultD" type="number" step="0.1" min="0" value="0">
+    </label>
+    <label class="f">組合せ加点（CV）
+      <input id="connection" type="number" step="0.1" min="0" value="0">
+    </label>
+    <label class="f">その他の実施減点
+      <input id="extraE" type="number" step="0.1" min="0" value="0">
+    </label>
+    <label class="f">ニュートラル減点（ライン・時間など）
+      <input id="neutral" type="number" step="0.1" min="0" value="0">
+    </label>
+  </div>
+  <label class="row" style="margin-top:8px"><input type="checkbox" id="stick"> 終末技の着地をピタリと止めた（+0.1 加点）</label>
+  <table class="br" id="breakdown" style="margin-top:10px"></table>
+  <div class="row" style="margin-top:10px">
+    <button id="copy">結果をコピー</button>
+    <button id="clear">技の登録をすべて消す</button>
+  </div>
+</section>
+
+<section class="card rules">
+  <h2>採点のしかた（根拠）</h2>
+  <p class="warn">この採点は姿勢解析による<b>目安</b>です。公式の得点は審判が判定します。技の難度は公式の難度表（技の名前とA〜Jの価値）で確認して選んでください。</p>
+  <details open>
+    <summary>決定点の計算</summary>
+    <p><b>決定点 ＝ Dスコア ＋ Eスコア − ニュートラル減点</b></p>
+    <ul>
+      <li><b>Dスコア（難しさ）</b>：数える技の難度価値（A=0.1, B=0.2, C=0.3, D=0.4, E=0.5, F=0.6 … J=1.0）＋ 技のグループ要求（各0.5）＋ 終末技グループ（男子：終末技の価値、上限0.5）＋ 組合せ加点。2025–2028年版では数える技が<b>8技</b>（終末技を含む）に減りました。ジュニアの規則では6技＋終末技です。</li>
+      <li><b>Eスコア（出来ばえ）</b>：10.0 から実施減点を引きます。</li>
+      <li><b>着地の加点</b>：2025年版から、終末技の着地をピタリと止めると 0.1 の加点があります。</li>
+    </ul>
+  </details>
+  <details>
+    <summary>実施減点の目安（姿勢から自動判定する項目）</summary>
+    <table>
+      <tr><th>欠点</th><th>小 0.1</th><th>中 0.3</th><th>大 0.5</th></tr>
+      <tr><td>腕・脚・体の曲がり</td><td>わずか</td><td>はっきり（約45°以上）</td><td>大きく（約90°以上）</td></tr>
+      <tr><td>倒立・静止技の角度のずれ</td><td>〜15°</td><td>16〜30°</td><td>31〜45°（45°超は技として認められない場合あり）</td></tr>
+      <tr><td>脚の開き</td><td>肩幅まで</td><td>肩幅以上</td><td></td></tr>
+      <tr><td>着地</td><td>小さな歩・跳ね（1回ごと）</td><td>大きな歩・跳ね／手が触れる</td><td>手で支える</td></tr>
+      <tr><td>落下</td><td colspan="3">1.0</td></tr>
+      <tr><td>静止技の保持</td><td colspan="3">2秒保持が必要（足りないと減点）</td></tr>
+    </table>
+    <p class="hint">横から撮った映像の2次元の角度で判定しています。カメラが斜めだと角度が実際とずれます。膝・腰の判定は「伸身・屈身・倒立」など形を選んだ技の区間だけで行い、抱え込みでの膝の曲がりは減点しません。</p>
+  </details>
+  <details>
+    <summary>参考にした資料</summary>
+    <ul>
+      <li>国際体操連盟（FIG）男子・女子 採点規則 2025–2028（gymnastics.sport）</li>
+      <li>日本体操協会 採点規則・ジュニア適用規則（jpn-gym.or.jp）</li>
+      <li>2025年版の主な変更（数える技が10→8、着地の0.1加点、終末技グループ上限0.5）</li>
+    </ul>
+  </details>
+</section>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
