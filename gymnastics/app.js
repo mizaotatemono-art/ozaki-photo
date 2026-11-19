@@ -46,6 +46,7 @@ function loadFile(file) {
   video.hidden = false;
   $('empty').hidden = true;
   state.frames = []; state.an = null; state.candidates = [];
+  state.pickPoint = null; state.picking = false;
   state.videoKey = `gym:${file.name}:${file.size}`;
   restore();
   video.onloadedmetadata = () => {
@@ -69,7 +70,7 @@ async function getLandmarker(model) {
     PoseLandmarker.createFromOptions(files, {
       baseOptions: { modelAssetPath: MODEL_URL(model), delegate },
       runningMode: 'VIDEO',
-      numPoses: 1,
+      numPoses: 4, // 審判・観客も映るので複数検出し、選手を追跡して選ぶ
       minPoseDetectionConfidence: 0.4,
       minPosePresenceConfidence: 0.4,
       minTrackingConfidence: 0.4,
@@ -95,16 +96,19 @@ $('analyze').onclick = async () => {
     const lm = await getLandmarker($('model').value);
     const fps = parseInt($('fps').value, 10);
     const dur = video.duration;
-    const n = Math.floor(dur * fps) + 1;
+    const t0 = state.pickPoint ? state.pickPoint.t : 0;
+    const n = Math.floor((dur - t0) * fps) + 1;
     const frames = [];
+    state.target = state.pickPoint ? { ...state.pickPoint } : null;
     let ts = 0;
     for (let i = 0; i < n; i++) {
-      const t = Math.min(dur - 0.001, i / fps);
+      const t = Math.min(dur - 0.001, t0 + i / fps);
       await seek(t);
       ts = Math.max(ts + 1, Math.round(t * 1000));
       const r = lm.detectForVideo(video, ts);
-      const p = r.landmarks?.[0];
-      frames.push({ t, pts: p ? toPixels(p, video.videoWidth, video.videoHeight) : null });
+      const cands = (r.landmarks || []).map((p) => toPixels(p, video.videoWidth, video.videoHeight));
+      const pts = pickAthlete(cands, frames, t);
+      frames.push({ t, pts });
       if (i % 3 === 0) {
         $('bar').style.width = `${((i + 1) / n) * 100}%`;
         setStatus(`解析中… ${i + 1} / ${n} コマ`);
@@ -115,7 +119,7 @@ $('analyze').onclick = async () => {
     setFrames(frames);
     const found = frames.filter((f) => f.pts).length;
     setStatus(`解析完了：${n} コマ中 ${found} コマで体を検出。候補 ${state.candidates.length} 件`);
-    await seek(0);
+    await seek(t0);
   } catch (err) {
     console.error(err);
     setStatus(`解析できませんでした：${err.message || err}`);
@@ -123,6 +127,42 @@ $('analyze').onclick = async () => {
     btn.disabled = false;
   }
 };
+
+// 複数人が映っている場合に選手を選ぶ：
+// 直前に追っていた人の近くにいる人を優先し、見失っていたら一番大きく映っている人を選ぶ。
+function bodyBox(p) {
+  const xs = [], ys = [];
+  for (const k of [0, 11, 12, 15, 16, 23, 24, 27, 28]) if (p[k].v > 0.3) { xs.push(p[k].x); ys.push(p[k].y); }
+  if (xs.length < 3) return null;
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, size: Math.max(x1 - x0, y1 - y0, 1) };
+}
+function pickAthlete(cands, frames, t) {
+  const boxes = cands.map(bodyBox);
+  const ok = cands.map((p, i) => ({ p, b: boxes[i] })).filter((x) => x.b);
+  if (!ok.length) return null;
+  if (state.target) {
+    const prev = [...frames].reverse().find((f) => f.pts && t - f.t < 0.6);
+    const pb = prev && bodyBox(prev.pts);
+    if (pb) {
+      let best = null, bestD = Infinity;
+      for (const x of ok) {
+        const d = Math.hypot(x.b.cx - pb.cx, x.b.cy - pb.cy) / pb.size;
+        if (d < bestD) { bestD = d; best = x; }
+      }
+      if (best && bestD < 1.5) return best.p;
+      return null; // 近くに誰もいない＝見失った（別人に飛ばない）
+    }
+  }
+  // 指定位置があればそこに一番近い人、なければ一番大きく映っている人
+  if (state.target?.x != null) {
+    ok.sort((a, b) => Math.hypot(a.b.cx - state.target.x, a.b.cy - state.target.y) - Math.hypot(b.b.cx - state.target.x, b.b.cy - state.target.y));
+    return ok[0].p;
+  }
+  ok.sort((a, b) => b.b.size - a.b.size);
+  state.target = state.target || {};
+  return ok[0].p;
+}
 
 function setFrames(frames) {
   state.frames = frames;
@@ -217,7 +257,24 @@ $('toggleOverlay').onclick = () => {
   $('toggleOverlay').textContent = state.showOverlay ? '骨格 表示中' : '骨格 非表示';
   tick();
 };
-$('stage').onclick = (e) => { if (e.target === video) $('play').click(); };
+$('stage').onclick = (e) => {
+  if (state.picking) {
+    const r = video.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * video.videoWidth;
+    const y = ((e.clientY - r.top) / r.height) * video.videoHeight;
+    state.pickPoint = { x, y, t: video.currentTime };
+    state.picking = false;
+    $('pickAthlete').textContent = '👆 選手を指定し直す';
+    setStatus(`選手を指定しました（${fmt(video.currentTime)}から解析します）`);
+    return;
+  }
+  if (e.target === video) $('play').click();
+};
+$('pickAthlete').onclick = () => {
+  video.pause();
+  state.picking = true;
+  setStatus('動画を選手が映っている所で止め、選手をタップしてください');
+};
 
 function frameAt(t) {
   const f = state.frames;
