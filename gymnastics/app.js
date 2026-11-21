@@ -121,6 +121,13 @@ $('analyze').onclick = async () => {
       let pts = pickAthlete(cands, t);
       // 見失ったら、いそうな場所を切り出して拡大・回転（逆さま対応）して探し直す
       if (!pts && state.track) pts = searchCrop(t);
+      // まだ選手を捉えていない時は、タップした場所の周りを拡大して探す
+      if (!pts && !state.track && state.pickPoint) {
+        const pp = state.pickPoint;
+        state.track = { cx: pp.x, cy: pp.y, size: Math.max(video.videoWidth, video.videoHeight) * 0.25, t: pp.t, vx: 0, vy: 0, colorN: 0 };
+        pts = searchCrop(t);
+        state.track = null;
+      }
       if (pts) updateTrack(pts, t);
       frames.push({ t, pts });
       if (i % 3 === 0) {
@@ -200,9 +207,16 @@ function pickAthlete(cands, t) {
   // 追跡開始：指定位置に一番近い人、指定がなければ一番大きく映っている人
   const idx = boxes.map((b, i) => i).filter((i) => boxes[i]);
   const pp = state.pickPoint;
-  idx.sort((i, j) =>
-    pp ? Math.hypot(boxes[i].cx - pp.x, boxes[i].cy - pp.y) - Math.hypot(boxes[j].cx - pp.x, boxes[j].cy - pp.y)
-       : boxes[j].size - boxes[i].size);
+  if (pp) {
+    // タップした場所に体が重なっている人だけを選ぶ（ブレて選手が写っていないコマで
+    // 近くの審判を選ばないように）。見つからなければ次のコマを待つ。
+    const dist = (i) => Math.hypot(boxes[i].cx - pp.x, boxes[i].cy - pp.y);
+    const near = idx.filter((i) => dist(i) < Math.max(boxes[i].size * 0.6, 25));
+    if (!near.length) return null;
+    near.sort((i, j) => dist(i) - dist(j));
+    return cands[near[0]];
+  }
+  idx.sort((i, j) => boxes[j].size - boxes[i].size);
   return cands[idx[0]];
 }
 function updateTrack(pts, t) {
