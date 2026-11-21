@@ -126,6 +126,7 @@ $('analyze').onclick = async () => {
         const pp = state.pickPoint;
         state.track = { cx: pp.x, cy: pp.y, size: Math.max(video.videoWidth, video.videoHeight) * 0.25, t: pp.t, vx: 0, vy: 0, colorN: 0 };
         pts = searchCrop(t);
+        if (pts && !containsTap(bodyBox(pts), pp)) pts = null;
         state.track = null;
       }
       if (pts) updateTrack(pts, t);
@@ -169,7 +170,7 @@ function bodyBox(p) {
   for (const k of [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) if (p[k].v > 0.3) { xs.push(p[k].x); ys.push(p[k].y); }
   if (xs.length < 4) return null;
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-  return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, size: Math.max(x1 - x0, y1 - y0, 1) };
+  return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, size: Math.max(x1 - x0, y1 - y0, 1), x0, x1, y0, y1 };
 }
 function predicted(t) {
   const tr = state.track;
@@ -211,13 +212,19 @@ function pickAthlete(cands, t) {
     // タップした場所に体が重なっている人だけを選ぶ（ブレて選手が写っていないコマで
     // 近くの審判を選ばないように）。見つからなければ次のコマを待つ。
     const dist = (i) => Math.hypot(boxes[i].cx - pp.x, boxes[i].cy - pp.y);
-    const near = idx.filter((i) => dist(i) < Math.max(boxes[i].size * 0.6, 25));
+    const near = idx.filter((i) => containsTap(boxes[i], pp));
     if (!near.length) return null;
     near.sort((i, j) => dist(i) - dist(j));
     return cands[near[0]];
   }
   idx.sort((i, j) => boxes[j].size - boxes[i].size);
   return cands[idx[0]];
+}
+// タップした点がその人の体の範囲（少し余裕を持たせる）に入っているか
+function containsTap(b, pp) {
+  if (!b) return false;
+  const m = Math.max(b.size * 0.15, 8);
+  return pp.x >= b.x0 - m && pp.x <= b.x1 + m && pp.y >= b.y0 - m && pp.y <= b.y1 + m;
 }
 function updateTrack(pts, t) {
   const b = bodyBox(pts);
