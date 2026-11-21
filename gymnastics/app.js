@@ -118,16 +118,23 @@ $('analyze').onclick = async () => {
       const r = lm.detectForVideo(video, ts);
       grabColorFrame(t);
       const cands = (r.landmarks || []).map((p) => toPixels(p, video.videoWidth, video.videoHeight));
-      let pts = pickAthlete(cands, t);
-      // 見失ったら、いそうな場所を切り出して拡大・回転（逆さま対応）して探し直す
-      if (!pts && state.track) pts = searchCrop(t);
-      // まだ選手を捉えていない時は、タップした場所の周りを拡大して探す
-      if (!pts && !state.track && state.pickPoint) {
-        const pp = state.pickPoint;
-        state.track = { cx: pp.x, cy: pp.y, size: Math.max(video.videoWidth, video.videoHeight) * 0.25, t: pp.t, vx: 0, vy: 0, colorN: 0 };
-        pts = searchCrop(t);
-        if (pts && !containsTap(bodyBox(pts), pp)) pts = null;
-        state.track = null;
+      let pts = null;
+      if (state.track) {
+        // 追跡中：選手のいそうな場所を切り出して拡大して検出（小さく写った選手・逆さまにも強い）。
+        // 見つからなければ画面全体の検出結果から探す
+        pts = searchCrop(t) || pickAthlete(cands, t);
+      } else {
+        pts = pickAthlete(cands, t);
+        // まだ選手を捉えていない時は、タップした場所の周りを拡大して探す
+        if (!pts && state.pickPoint) {
+          const pp = state.pickPoint;
+          state.track = { cx: pp.x, cy: pp.y, size: Math.min(video.videoWidth, video.videoHeight) * 0.3, t: pp.t, vx: 0, vy: 0, colorN: 0 };
+          pts = searchCrop(t);
+          if (pts && !containsTap(bodyBox(pts), pp)) pts = null;
+          state.track = null;
+        }
+        // 追跡の開始ははっきり写っている時だけ（ブレた誤検出で別の人に付かないように）
+        if (pts && coreVis(pts) < 0.5) pts = null;
       }
       if (pts) updateTrack(pts, t);
       frames.push({ t, pts });
@@ -277,15 +284,20 @@ function colorDiff(a, b) {
 const cropCanvas = document.createElement('canvas');
 const CROP = 512;
 cropCanvas.width = cropCanvas.height = CROP;
+function coreVis(p) {
+  return [11, 12, 23, 24, 25, 26, 27, 28].reduce((s, k) => s + (p[k].v || 0), 0) / 8;
+}
 function searchCrop(t) {
   if (!cropLandmarker) return null;
   const tr = state.track;
   const pr = predicted(t);
   if (pr.dt > 2.5) return null;
   const VW = video.videoWidth, VH = video.videoHeight;
-  const side = clamp(tr.size * (2.2 + 2 * Math.min(pr.dt, 1)), 160, Math.max(VW, VH));
+  const side = clamp(tr.size * (1.8 + 2 * Math.min(pr.dt, 1)), 96, Math.max(VW, VH));
   const sx = pr.x - side / 2, sy = pr.y - side / 2;
   const cctx = cropCanvas.getContext('2d');
+  let best = null;
+  // 0°→180°→90°→270° の順に回して検出し、一番はっきり写った結果を使う
   for (const deg of [0, 180, 90, 270]) {
     const rad = (deg * Math.PI) / 180;
     cctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -307,9 +319,13 @@ function searchCrop(t) {
       })
     );
     const i = matchTrack(cands, t);
-    if (i >= 0) return cands[i];
+    if (i < 0) continue;
+    const b = bodyBox(cands[i]);
+    const q = coreVis(cands[i]) - Math.hypot(b.cx - pr.x, b.cy - pr.y) / side;
+    if (!best || q > best.q) best = { q, pts: cands[i] };
+    if (q > 0.75) break; // 十分はっきり写っていれば残りの向きは試さない
   }
-  return null;
+  return best && best.q > 0.1 ? best.pts : null;
 }
 
 function setFrames(frames) {
